@@ -37,3 +37,5 @@ db.setProfilingLevel(2);
 
 On a replicaset you need to do setProfilingLevel on all members seperately, and they all log
 to their own profile collection (even though the drop/create commands are mirrored from the primary)
+
+This was tested on mongo 3.0. Your mileage may vary on other versions, and generally :)
