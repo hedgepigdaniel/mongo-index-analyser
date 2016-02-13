@@ -4,6 +4,8 @@ DB.prototype.indexStats = function() {
 	var BATCH_SIZE = 100;
 	var DEBUG = true;
 	var database = db.getName();
+	var IGNORED_OPERATORS = ["insert", "killcursors", "getmore"];
+	var IGNORED_COMMANDS = ["listIndexes", "dbStats"];
 
 	var unknown_operators = {};
 	var unknown_command_keys = {};
@@ -59,7 +61,8 @@ DB.prototype.indexStats = function() {
 				exec_stats.stage == "LIMIT" ||
 				exec_stats.stage == "PROJECTION" ||
 				exec_stats.stage == "UPDATE" ||
-				exec_stats.stage == "SKIP") {
+				exec_stats.stage == "SKIP" ||
+				exec_stats.stage == "DELETE") {
 			if (exec_stats.inputStage) {
 				updateIndexCounts(exec_stats.inputStage, collection_name, profile_document);
 			} else if (exec_stats.inputStages) {
@@ -104,6 +107,12 @@ DB.prototype.indexStats = function() {
 				updateIndexCounts(explain.queryPlanner.winningPlan, collection, profile_document);
 				break;
 
+			case "remove":
+				var collection = collectionNameFromProfileDocument(profile_document);
+				var explain = db[collection].explain().remove(profile_document.query);
+				updateIndexCounts(explain.queryPlanner.winningPlan, collection, profile_document);
+				break;
+
 			case "command":
 				var command = profile_document.command;
 				if (command.aggregate) {
@@ -121,7 +130,7 @@ DB.prototype.indexStats = function() {
 					updateIndexCounts(explain.queryPlanner.winningPlan, collection, profile_document);
 				} else if (command.distinct) {
 					var collection = command.distinct;
-					var explain = db[collection].explain().find(command.query);
+					var explain = db[collection].explain().find(command.query).finish();
 					updateIndexCounts(explain.queryPlanner.winningPlan, collection, profile_document);
 				} else if (command.findAndModify) {
 					var collection = command.findAndModify;
@@ -136,17 +145,33 @@ DB.prototype.indexStats = function() {
 					var explain = db[collection].explain().find(command.query).finish();
 					updateIndexCounts(explain.queryPlanner.winningPlan, collection, profile_document);
 				} else {
-					// Unhandled command
-					unknown_command_keys[JSON.stringify(Object.keys(command).sort())] = true;
+					var ignored = false;
+					for (var i in IGNORED_COMMANDS) {
+						var ignored_command = IGNORED_COMMANDS[i];
+						if (command[ignored_command]) {
+							ignored = true;
+						}
+					}
+					if (!ignored) {
+						unknown_command_keys[JSON.stringify(Object.keys(command).sort())] = true;
+					}
 				}
 				break;
 
 			default:
-				unknown_operators[profile_document.op] = true;
+				if (IGNORED_OPERATORS.indexOf(profile_document.op) === -1) {
+					unknown_operators[profile_document.op] = true;
+				}
 				break;
 		}
 
 	});
+
+	print("UNINDEXED QUERIES:");
+	printjson(Object.keys(unindexed_queries));
+
+	print("INDEXES_USED:");
+	printjson(index_use_counts);
 
 	if (DEBUG) {
 		if (Object.keys(unknown_operators).length) {
@@ -159,10 +184,5 @@ DB.prototype.indexStats = function() {
 			print("COLLECTIONS WHERE SOME QUERIES COULD NOT BE ANALYZED:", JSON.stringify(Object.keys(collections_with_summarized_info)));
 		}
 	}
-
-	print("UNINDEXED QUERIES:");
-	printjson(Object.keys(unindexed_queries));
-
-	print("INDEXES_USED:");
-	printjson(index_use_counts);
 };
+
