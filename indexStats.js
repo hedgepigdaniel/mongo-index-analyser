@@ -5,7 +5,7 @@ DB.prototype.indexStats = function() {
 	var DEBUG = true;
 	var database = db.getName();
 	var IGNORED_OPERATORS = ["insert", "killcursors", "getmore"];
-	var IGNORED_COMMANDS = ["listIndexes", "dbStats"];
+	var IGNORED_COMMANDS = ["listIndexes", "dbStats", "profile", "collStats"];
 
 	var unknown_operators = {};
 	var unknown_command_keys = {};
@@ -13,7 +13,7 @@ DB.prototype.indexStats = function() {
 	var index_use_counts = {};
 	var unindexed_queries = {};
 
-	var collections_with_summarized_info = {};
+	var collections_with_missing_info = {};
 
 	var collectionNameFromProfileDocument = function(profile_document) {
 		return profile_document.ns.replace(/^[^.]*\./, "");
@@ -27,28 +27,45 @@ DB.prototype.indexStats = function() {
 			var indexes = db[collection].getIndexes();
 			for (var j in indexes) {
 				var index = indexes[j];
-				index_use_counts[collection][index.name] = 0;
+				var defalt_name = convertKeySpecListToIndexName(index.key);
+				index_use_counts[collection][defalt_name] = 0;
 			}
 		}
 	};
 
-	var updateIndexCounts = function(exec_stats, collection_name, profile_document) {
+	var recordUseOfIndex = function(collection_name, index_name) {
+		if (!index_use_counts[collection_name]) {
+			index_use_counts[collection_name] = {};
+		}
+		if (!index_use_counts[collection_name][index_name]) {
+			index_use_counts[collection_name][index_name] = 0;
+		}
+		index_use_counts[collection_name][index_name]++;
+	};
 
+	var convertKeySpecListToIndexName = function(spec) {
+		var key_names = Object.keys(spec).map(function(key) {
+			return key + "_" + spec[key];
+		});
+		return key_names.join("_");
+	};
+
+	var convertSummaryToIndexName = function(summary) {
+		var json = summary.replace(/[A-z_.][A-z0-9_.]+/g, "\"$&\"");
+		var spec = JSON.parse(json);
+		return convertKeySpecListToIndexName(spec);
+	};
+
+	var updateIndexCounts = function(exec_stats, collection_name, profile_document) {
 		if (exec_stats.stage === "IXSCAN" || exec_stats.stage === "COUNT_SCAN" || exec_stats.stage === "IDHACK") {
 			// An index was used
 			var index_name;
 			if (exec_stats.stage === "IDHACK") {
-				index_name = "_id_";
+				index_name = "_id_1";
 			} else {
 				index_name = exec_stats.indexName
 			}
-			if (!index_use_counts[collection_name]) {
-				index_use_counts[collection_name] = {};
-			}
-			if (!index_use_counts[collection_name][index_name]) {
-				index_use_counts[collection_name][index_name] = 0;
-			}
-			index_use_counts[collection_name][index_name]++;
+			recordUseOfIndex(collection_name, index_name);
 		} else if (exec_stats.stage === "COLLSCAN" || exec_stats.stage === "SORT") {
 			// An index was not used
 			var query_string = JSON.stringify(profile_document);
@@ -62,7 +79,8 @@ DB.prototype.indexStats = function() {
 				exec_stats.stage == "PROJECTION" ||
 				exec_stats.stage == "UPDATE" ||
 				exec_stats.stage == "SKIP" ||
-				exec_stats.stage == "DELETE") {
+				exec_stats.stage == "DELETE" ||
+				exec_stats.stage == "SORT_MERGE") {
 			if (exec_stats.inputStage) {
 				updateIndexCounts(exec_stats.inputStage, collection_name, profile_document);
 			} else if (exec_stats.inputStages) {
@@ -74,7 +92,12 @@ DB.prototype.indexStats = function() {
 			// Not sure what this means but I don't think it matters
 		} else if (exec_stats.summary) {
 			// mongo cbfed printing the information
-			collections_with_summarized_info[collection_name] = true;
+			if (exec_stats.summary.startsWith("IXSCAN")) {
+				var index_name = convertSummaryToIndexName(exec_stats.summary.replace(/^IXSCAN /, ""));
+				recordUseOfIndex(collection_name, index_name);
+			} else {
+				collections_with_missing_info[collection_name] = true;
+			}
 		} else {
 			print(JSON.stringify(profile_document));
 			print(JSON.stringify(exec_stats));
@@ -115,6 +138,16 @@ DB.prototype.indexStats = function() {
 
 			case "command":
 				var command = profile_document.command;
+				if (!(command instanceof Object)) {
+					// Happens when the command is very long - becomes an ellipsised string
+					// This is a hack to get the collection name out (the value of the first
+					// key in the incomplete JSON object)
+					var prefix = new RegExp("\\{ [A-z]+:[^\"]*\"");
+					var postfix = new RegExp("[^A-z].*$");
+					var collection = command.replace(prefix, "").replace(postfix, "");
+					collections_with_missing_info[collection] = true;
+					return;
+				}
 				if (command.aggregate) {
 					var collection = command.aggregate;
 					var explain = db[collection].explain().aggregate(command.pipeline);
@@ -153,7 +186,13 @@ DB.prototype.indexStats = function() {
 						}
 					}
 					if (!ignored) {
-						unknown_command_keys[JSON.stringify(Object.keys(command).sort())] = true;
+						var key;
+						if (command instanceof Object) {
+							key = JSON.stringify(Object.keys(command).sort());
+						} else {
+							key = command;
+						}
+						unknown_command_keys[key] = true;
 					}
 				}
 				break;
@@ -180,8 +219,8 @@ DB.prototype.indexStats = function() {
 		if (Object.keys(unknown_command_keys).length) {
 			print("UNHANDLED COMMAND OPERATORS FOUND:", JSON.stringify(Object.keys(unknown_command_keys)));
 		}
-		if (Object.keys(collections_with_summarized_info).length) {
-			print("COLLECTIONS WHERE SOME QUERIES COULD NOT BE ANALYZED:", JSON.stringify(Object.keys(collections_with_summarized_info)));
+		if (Object.keys(collections_with_missing_info).length) {
+			print("COLLECTIONS WHERE SOME QUERIES COULD NOT BE ANALYZED:", JSON.stringify(Object.keys(collections_with_missing_info)));
 		}
 	}
 };
