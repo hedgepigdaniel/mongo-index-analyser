@@ -13,22 +13,26 @@ It can report the following information:
 Usage
 -----
 
-First turn on profiling on your mongod instance
+First turn on profiling on your mongod instance from the mongo shell:
 
 ```javascript
 use somedatabase;
-db.setProfilingLevel(0);
+db.setProfilingLevel(2);
 ```
 
-Then copy and paste the contents of indexStats.js into the shell and run db.indexStats()
+Then copy and paste the contents of indexStats.js into the shell and run
+```javascript
+db.indexStats()
+```
 
 If you want to increase the size of the profile collection from its default which is small:
 
 ```javascript
-use <yourdatabase>;
+use yourdatabase;
 db.setProfilingLevel(0);
 db.system.profile.drop();
-db.createCollection("system.profile", {capped: true, size: <profile size>})
+db.createCollection("system.profile", {capped: true, size: yourprofilesize})
+db.setProfilingLevel(2);
 ```
 
 On a replicaset you need to do setProfilingLevel on all members seperately, and they all log
