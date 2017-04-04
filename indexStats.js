@@ -11,7 +11,9 @@ DB.prototype.indexStats = function() {
   var unknown_command_keys = {};
 
   var index_use_counts = {};
-  var unindexed_queries = {};
+  var collscan_queries = {};
+  var inefficient_ixscan_queries = {};
+  var inefficient_sort_queries = {};
 
   var collections_with_missing_info = {};
 
@@ -82,10 +84,19 @@ DB.prototype.indexStats = function() {
         index_name = exec_stats.indexName
       }
       recordUseOfIndex(collection_name, index_name);
-    } else if (exec_stats.stage === "COLLSCAN" || exec_stats.stage === "SORT") {
-      // An index was not used
+    } else if (exec_stats.stage === "COLLSCAN") {
+      // The entire collection was scanned and no index was used at all
       var query_string = JSON.stringify(profile_document);
-      unindexed_queries[query_string] = true;
+      collscan_queries[query_string] = profile_document;
+    } else if (exec_stats.stage === "SORT") {
+      if (exec_stats.memUsage > 1048576) {
+        // An index was not used for sorting and the sort used more than 1MB of memory
+        var query_string = JSON.stringify (profile_document);
+        inefficient_sort_queries[query_string] = {
+          document: profile_document,
+          mem_usage: exec_stats.memUsage,
+        };
+      }
     } else if (exec_stats.stage == "FETCH" ||
         exec_stats.stage == "SUBPLAN" ||
         exec_stats.stage == "OR" ||
@@ -97,6 +108,17 @@ DB.prototype.indexStats = function() {
         exec_stats.stage == "SKIP" ||
         exec_stats.stage == "DELETE" ||
         exec_stats.stage == "SORT_MERGE") {
+      if (exec_stats.stage === 'FETCH') {
+        if (exec_stats.nReturned + 1000 < exec_stats.docsExamined) {
+          // This means that although an index was used, at least 100
+          // documents were filtered out after the index was applied
+          var query_string = JSON.stringify(profile_document);
+          inefficient_ixscan_queries[query_string] = {
+            document: profile_document,
+            surplus_scans: exec_stats.docsExamined - exec_stats.nReturned,
+          };
+        }
+      }
       if (exec_stats.inputStage) {
         updateIndexCounts(exec_stats.inputStage, collection_name, profile_document);
       } else if (exec_stats.inputStages) {
@@ -226,8 +248,31 @@ DB.prototype.indexStats = function() {
 
   });
 
-  print("UNINDEXED QUERIES:");
-  printjson(Object.keys(unindexed_queries));
+  print("INNEFFICIENT SORT QUERIES:");
+  printjson(Object.keys(inefficient_sort_queries)
+    .map(function(query_string) {
+      return inefficient_sort_queries[query_string];
+    })
+    .sort(function(a, b) {
+      return a.mem_usage - b.mem_usage;
+    })
+  );
+
+  print("INNEFFICIENT IXSCAN QUERIES:");
+  printjson(Object.keys(inefficient_ixscan_queries)
+    .map(function(query_string) {
+      return inefficient_ixscan_queries[query_string];
+    }).sort(function(a, b) {
+      return a.surplus_scans - b.surplus_scans;
+    })
+  );
+
+  print("COLLSCAN QUERIES:");
+  printjson(Object.keys(collscan_queries)
+    .map(function(query_string) {
+      return collscan_queries[query_string];
+    })
+  );
 
   print("INDEXES_USED:");
   printjson(index_use_counts);
