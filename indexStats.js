@@ -135,14 +135,19 @@ DB.prototype.indexStats = function() {
 
     switch(profile_document.op) {
       case "query":
-        var collection = collectionNameFromProfileDocument(profile_document);
-        updateIndexCounts(profile_document.execStats, collection, profile_document);
+        var collection = collectionNameFromProfileDocument (profile_document);
+        updateIndexCounts (profile_document.execStats, collection, profile_document);
         break;
 
       case "update":
-        var collection = collectionNameFromProfileDocument(profile_document);
-        var explain = db[collection].explain().update(profile_document.query, profile_document.updateobj);
-        updateIndexCounts(explain.queryPlanner.winningPlan, collection, profile_document);
+        var collection = collectionNameFromProfileDocument (profile_document);
+        if (profile_document.updateobj instanceof Object) {
+          var explain = db[collection].explain().update(profile_document.query, profile_document.updateobj);
+          updateIndexCounts(explain.queryPlanner.winningPlan, collection, profile_document);
+        } else {
+          // Sometimes when the update object is large it comes out has a kind of json like string...
+          collections_with_missing_info[collection] = true;
+        }
         break;
 
       case "remove":
