@@ -50,10 +50,26 @@ DB.prototype.indexStats = function() {
     return key_names.join("_");
   };
 
-  var convertSummaryToIndexName = function(summary) {
+  var convertSummaryToIndexName = function(collection_name, summary) {
     var json = summary.replace(/[A-z_.][A-z0-9_.]+/g, "\"$&\"");
-    var spec = JSON.parse(json);
+    try {
+      var spec = JSON.parse (json);
+    } catch (e) {
+      collections_with_missing_info[collection_name] = true;
+      return null;
+    }
     return convertKeySpecListToIndexName(spec);
+  };
+
+  var recordIndexUseFromSummary = function(collection_name, summary) {
+    var clauses = summary.match(/IXSCAN\s*{.*?}/g);
+    for (var i = 0; i < clauses.length; i++) {
+      var clause = clauses[i];
+      var index_name = convertSummaryToIndexName(collection_name, clause.replace(/^IXSCAN /, ""));
+      if (index_name !== null) {
+        recordUseOfIndex(collection_name, index_name);
+      }
+    }
   };
 
   var updateIndexCounts = function(exec_stats, collection_name, profile_document) {
@@ -93,8 +109,7 @@ DB.prototype.indexStats = function() {
     } else if (exec_stats.summary) {
       // mongo cbfed printing the information
       if (exec_stats.summary.startsWith("IXSCAN")) {
-        var index_name = convertSummaryToIndexName(exec_stats.summary.replace(/^IXSCAN /, ""));
-        recordUseOfIndex(collection_name, index_name);
+        recordIndexUseFromSummary(collection_name, exec_stats.summary);
       } else {
         collections_with_missing_info[collection_name] = true;
       }
