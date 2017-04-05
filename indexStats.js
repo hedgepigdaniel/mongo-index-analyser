@@ -1,6 +1,6 @@
 
 
-DB.prototype.indexStats = function() {
+DB.prototype.indexStats = function(slowQueries) {
   var BATCH_SIZE = 100;
   var DEBUG = true;
   var database = db.getName();
@@ -86,7 +86,7 @@ DB.prototype.indexStats = function() {
       recordUseOfIndex(collection_name, index_name);
     } else if (exec_stats.stage === "COLLSCAN") {
       // The entire collection was scanned and no index was used at all
-      if (profile_document.nScannedObjects > 1000) {
+      if (slowQueries && profile_document.nScannedObjects > 1000) {
         var query_string = JSON.stringify (profile_document);
         collscan_queries[query_string] = {
           document: profile_document,
@@ -94,7 +94,7 @@ DB.prototype.indexStats = function() {
         };
       }
     } else if (exec_stats.stage === "SORT") {
-      if (exec_stats.memUsage > 1048576) {
+      if (slowQueries && exec_stats.memUsage > 1048576) {
         // An index was not used for sorting and the sort used more than 1MB of memory
         var query_string = JSON.stringify (profile_document);
         inefficient_sort_queries[query_string] = {
@@ -114,7 +114,7 @@ DB.prototype.indexStats = function() {
         exec_stats.stage == "DELETE" ||
         exec_stats.stage == "SORT_MERGE") {
       if (exec_stats.stage === 'FETCH') {
-        if (exec_stats.nReturned + 1000 < exec_stats.docsExamined) {
+        if (slowQueries && exec_stats.nReturned + 1000 < exec_stats.docsExamined) {
           // This means that although an index was used, at least 100
           // documents were filtered out after the index was applied
           var query_string = JSON.stringify(profile_document);
@@ -159,7 +159,6 @@ DB.prototype.indexStats = function() {
   };
 
   db.system.profile.find(query).sort({"$natural": -1}).addOption(DBQuery.Option.noTimeout).batchSize(BATCH_SIZE).forEach(function(profile_document) {
-
     switch(profile_document.op) {
       case "query":
         var collection = collectionNameFromProfileDocument (profile_document);
@@ -250,36 +249,37 @@ DB.prototype.indexStats = function() {
         }
         break;
     }
-
   });
 
-  print("INNEFFICIENT SORT QUERIES:");
-  printjson(Object.keys(inefficient_sort_queries)
-    .map(function(query_string) {
-      return inefficient_sort_queries[query_string];
-    })
-    .sort(function(a, b) {
-      return a.mem_usage - b.mem_usage;
-    })
-  );
+  if (slowQueries) {
+    print ("INNEFFICIENT SORT QUERIES:");
+    printjson (Object.keys (inefficient_sort_queries)
+      .map (function (query_string) {
+        return inefficient_sort_queries[query_string];
+      })
+      .sort (function (a, b) {
+        return a.mem_usage - b.mem_usage;
+      })
+    );
 
-  print("INNEFFICIENT IXSCAN QUERIES:");
-  printjson(Object.keys(inefficient_ixscan_queries)
-    .map(function(query_string) {
-      return inefficient_ixscan_queries[query_string];
-    }).sort(function(a, b) {
-      return a.surplus_scans - b.surplus_scans;
-    })
-  );
+    print ("INNEFFICIENT IXSCAN QUERIES:");
+    printjson (Object.keys (inefficient_ixscan_queries)
+      .map (function (query_string) {
+        return inefficient_ixscan_queries[query_string];
+      }).sort (function (a, b) {
+        return a.surplus_scans - b.surplus_scans;
+      })
+    );
 
-  print("COLLSCAN QUERIES:");
-  printjson(Object.keys(collscan_queries)
-    .map(function(query_string) {
-      return collscan_queries[query_string];
-    }).sort(function(a, b) {
-      return a.n_scanned - b.n_scanned;
-    })
-  );
+    print ("COLLSCAN QUERIES:");
+    printjson (Object.keys (collscan_queries)
+      .map (function (query_string) {
+        return collscan_queries[query_string];
+      }).sort (function (a, b) {
+        return a.n_scanned - b.n_scanned;
+      })
+    );
+  }
 
   print("INDEXES_USED:");
   printjson(index_use_counts);
