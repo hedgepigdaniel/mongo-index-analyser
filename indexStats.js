@@ -297,3 +297,24 @@ DB.prototype.indexStats = function(slowQueries) {
   }
 };
 
+DB.prototype.indexSizes = function() {
+  return db
+    .getCollectionNames()
+    .map(function(col_name) {
+      return db[col_name];
+    })
+    .reduce(function(indexes, collection) {
+      var index_sizes = collection.stats().indexSizes;
+      return indexes.concat(Object.keys(index_sizes).map(function(index_name) {
+        return {
+          index_name: collection.name + '.' + index_name,
+          index_size: index_sizes[index_name],
+        };
+      }));
+    }, [])
+    .sort(function(a, b) {
+      return a.index_size - b.index_size;
+    })
+  ;
+};
+
