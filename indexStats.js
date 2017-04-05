@@ -86,8 +86,13 @@ DB.prototype.indexStats = function() {
       recordUseOfIndex(collection_name, index_name);
     } else if (exec_stats.stage === "COLLSCAN") {
       // The entire collection was scanned and no index was used at all
-      var query_string = JSON.stringify(profile_document);
-      collscan_queries[query_string] = profile_document;
+      if (profile_document.nScannedObjects > 1000) {
+        var query_string = JSON.stringify (profile_document);
+        collscan_queries[query_string] = {
+          document: profile_document,
+          n_scanned: profile_document.nScannedObjects,
+        };
+      }
     } else if (exec_stats.stage === "SORT") {
       if (exec_stats.memUsage > 1048576) {
         // An index was not used for sorting and the sort used more than 1MB of memory
@@ -271,6 +276,8 @@ DB.prototype.indexStats = function() {
   printjson(Object.keys(collscan_queries)
     .map(function(query_string) {
       return collscan_queries[query_string];
+    }).sort(function(a, b) {
+      return a.n_scanned - b.n_scanned;
     })
   );
 
